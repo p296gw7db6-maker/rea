@@ -7,11 +7,23 @@ plain-stdlib runner at the bottom:  PYTHONPATH=src python tests/test_smoke.py).
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
 from spotsync.models import Track
 from spotsync import normalize, match, playlists, report
+
+
+def _write_export(spotify_dir: Path, named_playlists, saved=None):
+    spotify_dir.mkdir(parents=True, exist_ok=True)
+    pls = []
+    for i, (name, tracks) in enumerate(named_playlists):
+        pls.append({"id": f"pl{i}", "name": name, "tracks": [t.to_dict() for t in tracks]})
+    (spotify_dir / "playlists.json").write_text(json.dumps({"user": "u", "playlists": pls}))
+    (spotify_dir / "saved.json").write_text(
+        json.dumps({"user": "u", "tracks": [t.to_dict() for t in (saved or [])]})
+    )
 
 
 def _sp(title, artist, isrc=None, dur=None, ctx=("Playlist A",)):
@@ -70,27 +82,61 @@ def test_duration_gate_blocks_wrong_length():
     assert results2[0].method == "none"
 
 
+def test_path_mapper_preserves_subtree():
+    mapper = playlists.PathMapper.parse(["/home/me/music=/srv/media"])
+    assert mapper.map("/home/me/music/Artist/Album/01.flac") == "/srv/media/Artist/Album/01.flac"
+    assert mapper.map("/other/x.flac") == "/other/x.flac"  # unmatched stays untouched
+    # longest-prefix wins
+    mapper2 = playlists.PathMapper.parse(["/a=/X", "/a/b=/Y"])
+    assert mapper2.map("/a/b/c.flac") == "/Y/c.flac"
+
+
 def test_playlists_and_reports_roundtrip():
-    spotify = [
-        _sp("Hit", "A", isrc="X1", dur=180000, ctx=("Favs",)),
-        _sp("Gone", "B", dur=200000, ctx=("Favs",)),  # missing
-    ]
+    hit = _sp("Hit", "A", isrc="X1", dur=180000, ctx=("Favs",))
+    gone = _sp("Gone", "B", dur=200000, ctx=("Favs",))  # missing locally
     library = [_lib("Hit", "A", isrc="X1", dur=180000, path="/music/hit.flac")]
-    results = match.match_tracks(spotify, library)
+    results = match.match_tracks([hit, gone], library)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        pl_summary = playlists.write_playlists(results, tmp / "pl")
-        assert pl_summary["playlists_written"] == 1
+        sp_dir = tmp / "spotify"
+        _write_export(sp_dir, [("Favs", [hit, gone])])
+        summary = playlists.build_playlists(
+            sp_dir, results, tmp / "pl", path_maps=["/music=/srv/music"]
+        )
+        assert summary["playlists_written"] == 1
+        assert summary["files"]["Favs.m3u8"] == {"matched": 1, "total": 2}
         m3u = (tmp / "pl" / "Favs.m3u8").read_text()
         assert "#EXTM3U" in m3u
-        assert "/music/hit.flac" in m3u
+        assert "/srv/music/hit.flac" in m3u  # path remapped onto server prefix
         assert "A - Hit" in m3u
 
         gap = report.write_gap_report(results, tmp / "rep")
         assert gap["missing_tracks"] == 1
-        gaps_csv = (tmp / "rep" / "gaps.csv").read_text()
-        assert "Gone" in gaps_csv
+        assert "Gone" in (tmp / "rep" / "gaps.csv").read_text()
+
+
+def test_same_name_playlists_get_separate_files():
+    t1 = _sp("S1", "A", isrc="I1", dur=1000)
+    t2 = _sp("S2", "B", isrc="I2", dur=1000)
+    library = [
+        _lib("S1", "A", isrc="I1", dur=1000, path="/m/s1.flac"),
+        _lib("S2", "B", isrc="I2", dur=1000, path="/m/s2.flac"),
+    ]
+    results = match.match_tracks([t1, t2], library)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        sp_dir = tmp / "spotify"
+        _write_export(sp_dir, [("Chill", [t1]), ("Chill", [t2])])
+        summary = playlists.build_playlists(sp_dir, results, tmp / "pl")
+        assert summary["playlists_written"] == 2
+        contents = {p.name: p.read_text() for p in (tmp / "pl").glob("*.m3u8")}
+        assert len(contents) == 2
+        assert any("/m/s1.flac" in c for c in contents.values())
+        assert any("/m/s2.flac" in c for c in contents.values())
+        # the two tracks must NOT end up merged into one file
+        assert not any("/m/s1.flac" in c and "/m/s2.flac" in c for c in contents.values())
 
 
 def _run_all():

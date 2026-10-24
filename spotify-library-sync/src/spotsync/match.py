@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -46,7 +46,6 @@ class _LibraryIndex:
         self.by_aggressive: dict[str, Track] = {}
         self.token_index: dict[str, list[int]] = defaultdict(list)
         self.library = library
-        self.duplicates: dict[str, list[str]] = defaultdict(list)
 
         for idx, track in enumerate(library):
             if track.isrc:
@@ -55,8 +54,6 @@ class _LibraryIndex:
             aggressive = normalize.match_key(track.primary_artist, track.title, aggressive=True)
             self.by_strict.setdefault(strict, track)
             self.by_aggressive.setdefault(aggressive, track)
-            if track.path:
-                self.duplicates[aggressive].append(track.path)
             for tok in normalize.tokens(track.title):
                 self.token_index[tok].append(idx)
 

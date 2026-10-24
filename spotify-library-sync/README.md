@@ -69,7 +69,7 @@ python -m spotsync scan --root /pfad/zu/deiner/musik --out data/library.json
 python -m spotsync match --spotify data/spotify --library data/library.json --out data/matches.json
 
 # 5. Lokale Playlists bauen
-python -m spotsync playlists --matches data/matches.json --out data/playlists
+python -m spotsync playlists --spotify data/spotify --matches data/matches.json --out data/playlists
 
 # 6. Lücken + Dubletten
 python -m spotsync report --matches data/matches.json --library data/library.json --out data/reports
@@ -84,15 +84,48 @@ python -m spotsync all --root /pfad/zu/deiner/musik --out data
 ### Pfade auf den Server umbiegen
 
 Wenn du lokal scannst, die Playlists aber auf dem Server mit anderem Mount-Pfad
-laufen sollen:
+laufen sollen, mappst du Präfixe (die Ordnerstruktur darunter bleibt erhalten):
 
 ```bash
-python -m spotsync playlists --matches data/matches.json --out data/playlists \
-  --base-path /srv/music          # setzt Dateinamen neu auf /srv/music/<datei>
+python -m spotsync playlists --spotify data/spotify --matches data/matches.json \
+  --out data/playlists \
+  --path-map /home/ich/musik=/srv/media      # mehrfach möglich; längster Präfix gewinnt
 # oder relative Pfade:
-python -m spotsync playlists --matches data/matches.json --out data/playlists \
-  --relative-to /srv/music
+python -m spotsync playlists --spotify data/spotify --matches data/matches.json \
+  --out data/playlists --relative-to /srv/media
 ```
+
+## Jellyfin (additiv, Vorschau zuerst)
+
+Statt `.m3u8`-Dateien kannst du Playlists direkt in Jellyfin anlegen. Dafür
+scannst du Jellyfins Audio-Items (statt der lokalen Platte) und gleichst
+dagegen ab. Jellyfin liefert **keine ISRC**, der Abgleich läuft also über
+Titel/Artist/Dauer.
+
+API-Key: in Jellyfin unter *Dashboard → API-Schlüssel* anlegen.
+
+```bash
+export SPOTSYNC_JELLYFIN_URL="https://jellyfin.example"
+export SPOTSYNC_JELLYFIN_API_KEY="dein_api_key"
+
+# 1. Jellyfin-Bibliothek als Index einlesen
+python -m spotsync jellyfin-scan --user DEINNAME --out data/jellyfin.json
+
+# 2. Gegen den Jellyfin-Index abgleichen
+python -m spotsync match --spotify data/spotify --library data/jellyfin.json --out data/matches-jf.json
+
+# 3. VORSCHAU (offline, legt nichts an): zeigt, welche Playlists entstünden
+python -m spotsync jellyfin-push --spotify data/spotify --matches data/matches-jf.json \
+  --name-prefix "Spotify • "
+
+# 4. Erst mit --apply werden Playlists tatsächlich ANGELEGT (nie gelöscht/geändert)
+python -m spotsync jellyfin-push --spotify data/spotify --matches data/matches-jf.json \
+  --name-prefix "Spotify • " --apply
+```
+
+Wichtig: `jellyfin-push` **legt nur an**. Es ändert oder löscht nie etwas.
+Ein erneuter `--apply`-Lauf erzeugt also zusätzliche Playlists — das ist
+bewusst so (kein stilles Überschreiben deiner bestehenden Playlists).
 
 ## Abgleich-Logik (Reihenfolge, stärkste zuerst)
 
@@ -119,7 +152,16 @@ mit `SPOTSYNC_HOME`.
 
 ## Status
 
-v0: lauffähige End-to-End-Pipeline. Kern (Normalisierung, Matching, Playlist-/
-Report-Ausgabe) ist mit Smoke-Tests abgedeckt; die Spotify-Export-Pfade
-erfordern eine echte App-Autorisierung und sind noch nicht gegen die Live-API
-verifiziert (siehe `tests/`).
+v0: lauffähige End-to-End-Pipeline (lokal + Jellyfin).
+
+**Verifiziert (Tests + CLI-Durchlauf):** Normalisierung, die vier Match-Stufen
+inkl. Dauer-Gate, Playlist-/Report-Ausgabe, Präfix-Path-Mapping,
+Namenskollisionen, sowie die Jellyfin-Planungs-/Push-Logik (Vorschau + Apply mit
+Fake-Client). Siehe `tests/test_smoke.py` und `tests/test_jellyfin.py`.
+
+**NICHT verifiziert:** Der Live-Spotify-Export (`auth`/`export`) braucht deine
+App-Autorisierung. Die echten Jellyfin-HTTP-Aufrufe (`jellyfin-scan`, und
+`jellyfin-push --apply`) sind gegen die OpenAPI-Spec 12.3.0 geschrieben, aber
+nicht gegen einen echten Server gelaufen — insbesondere das Auth-Header-Format
+(`Authorization: MediaBrowser Token="..."`) und die Listen-Parameter. Falls dein
+Server das ablehnt, ist das die erste Stelle zum Nachjustieren.
