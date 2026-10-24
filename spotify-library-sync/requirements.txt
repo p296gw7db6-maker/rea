@@ -1,0 +1,2 @@
+# Runtime dependency. Everything else (HTTP, OAuth, JSON, CSV) is stdlib.
+mutagen>=1.47

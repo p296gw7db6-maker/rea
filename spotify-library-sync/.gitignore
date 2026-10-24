@@ -1,0 +1,7 @@
+# Local output + caches — never commit exported data or tokens.
+data/
+*.m3u8
+__pycache__/
+*.pyc
+.venv/
+token.json

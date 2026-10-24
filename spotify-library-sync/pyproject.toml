@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotsync"
+version = "0.1.0"
+description = "Export Spotify playlist/library metadata (read-only) and match it against your own local music files."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mutagen>=1.47",
+]
+
+[project.scripts]
+spotsync = "spotsync.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
